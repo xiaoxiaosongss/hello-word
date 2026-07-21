@@ -26,6 +26,7 @@ demos=(
   "com.demo.delay.DelayMessageDemo"
   "com.demo.transaction.TransactionMessageDemo"
   "com.demo.filter.TagFilterDemo"
+  "com.demo.retry.RetryAndDlqDemo"
 )
 
 for demo in "${demos[@]}"; do

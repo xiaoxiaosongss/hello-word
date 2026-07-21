@@ -56,6 +56,9 @@ mvn -q exec:java -Dexec.mainClass="com.demo.transaction.TransactionMessageDemo"
 # Tag 过滤
 mvn -q exec:java -Dexec.mainClass="com.demo.filter.TagFilterDemo"
 
+# 重试队列 + 死信队列（需等待约 40s，maxReconsumeTimes=2）
+mvn -q exec:java -Dexec.mainClass="com.demo.retry.RetryAndDlqDemo"
+
 # 存储模型概念演示（无需 Broker，纯内存模拟）
 mvn -q exec:java -Dexec.mainClass="com.demo.storage.StorageModelDemo"
 
@@ -72,6 +75,7 @@ bash run-all.sh
 | `src/main/java/com/demo/delay/DelayMessageDemo.java` | `delayTimeLevel` 延迟投递 |
 | `src/main/java/com/demo/transaction/TransactionMessageDemo.java` | 事务消息两阶段提交与回查 |
 | `src/main/java/com/demo/filter/TagFilterDemo.java` | 生产者打 Tag、消费者 Tag 过滤 |
+| `src/main/java/com/demo/retry/RetryAndDlqDemo.java` | `%RETRY%` 重试 → `%DLQ%` 死信、`setMaxReconsumeTimes` |
 | `src/main/java/com/demo/storage/StorageModelDemo.java` | CommitLog + ConsumeQueue 写入/读取流程 |
 
 ## 停止环境

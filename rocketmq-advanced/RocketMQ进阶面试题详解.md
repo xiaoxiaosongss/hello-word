@@ -176,11 +176,103 @@ Consumer Group 内各实例**重新分配 MessageQueue** 的过程。
 - **广播模式**：Consumer 本地 `~/.rocketmq_offsets` 文件。
 - 重置 Offset：`consumer.resetOffsetByTimestamp()` 或控制台按时间重置，用于回溯消费。
 
-### 18. 消费失败后的重试机制？
+### 18. 消费失败后的重试机制？（高频）
 
-1. 消费失败 → 消息发回 Broker **重试队列** `%RETRY%<ConsumerGroup>`。
-2. 延迟级别递增重试（默认最多 16 次，间隔 10s 30s 1m ...）。
-3. 超过最大重试次数 → 进入**死信队列（DLQ）** `%DLQ%<ConsumerGroup>`，需人工介入或单独消费。
+#### 重试进哪个队列？
+
+消费失败后，消息**不会回到原 Topic**，而是进入该 Consumer Group 专属的重试 Topic：
+
+```
+%RETRY%<ConsumerGroupName>
+```
+
+示例：Consumer Group 为 `order_consumer_group` → 重试 Topic 为 `%RETRY%order_consumer_group`。
+
+| 要点 | 说明 |
+| --- | --- |
+| 生效范围 | 仅**集群消费（CLUSTERING）**支持；广播模式失败不重试 |
+| 并发消费 | 失败消息由 Broker 写入 `%RETRY%...`，按固定延迟级别定时再投递 |
+| 顺序消费 | 先在**客户端本地重试**（避免跳过失败消息导致乱序），超限后才进重试队列 |
+
+触发重试的方式：
+
+```java
+// 并发消费：返回 RECONSUME_LATER
+return ConsumeConcurrentlyStatus.RECONSUME_LATER;
+
+// 顺序消费：暂停当前 Queue 后重试
+context.setSuspendCurrentQueueTimeMillis(5000);
+return ConsumeOrderlyStatus.SUSPEND_CURRENT_QUEUE_A_MOMENT;
+
+// 抛异常也会触发重试（不推荐，优先显式返回状态）
+```
+
+#### 默认重试多少次进死信队列？
+
+**并发消费**默认 `maxReconsumeTimes = 16`：
+
+| 阶段 | 次数 |
+| --- | --- |
+| 首次消费 | 1 次 |
+| 重试 | 最多 16 次 |
+| **合计最多消费** | **17 次** |
+
+第 17 次仍失败 → 进入死信队列。死信 Topic 命名：
+
+```
+%DLQ%<ConsumerGroupName>
+```
+
+示例：`%DLQ%order_consumer_group`
+
+> **顺序消费**默认 `maxReconsumeTimes = Integer.MAX_VALUE`（几乎不会进 DLQ），需手动配置。
+
+#### 重试间隔（并发消费，不可自定义）
+
+| 重试次数 | 距上次间隔 | 重试次数 | 距上次间隔 |
+| --- | --- | --- | --- |
+| 1 | 10s | 9 | 7min |
+| 2 | 30s | 10 | 8min |
+| 3 | 1min | 11 | 9min |
+| 4 | 2min | 12 | 10min |
+| 5 | 3min | 13 | 20min |
+| 6 | 4min | 14 | 30min |
+| 7 | 5min | 15 | 1h |
+| 8 | 6min | 16 | 2h |
+
+超过 16 次重试后，若 `maxReconsumeTimes` 设得更大，后续间隔固定 **2 小时**。顺序消费可通过 `setSuspendCurrentQueueTimeMillis()` 自定义间隔。
+
+#### 怎么配置重试次数？
+
+```java
+DefaultMQPushConsumer consumer = new DefaultMQPushConsumer("order_consumer_group");
+consumer.setMaxReconsumeTimes(5); // 最多重试 5 次，第 6 次消费仍失败 → 进 DLQ
+```
+
+`maxReconsumeTimes = N` 表示最多重试 N 次（不含首次），即最多消费 **N + 1** 次。
+
+查看当前重试次数：
+
+```java
+int retryCount = msg.getReconsumeTimes(); // 0 = 首次消费，1 = 第 1 次重试
+```
+
+#### 死信队列如何处理？
+
+死信消息**不会自动再消费**，需单独订阅 DLQ Topic 做补偿、告警或人工处理：
+
+```java
+DefaultMQPushConsumer dlqConsumer = new DefaultMQPushConsumer("dlq_handler_group");
+dlqConsumer.subscribe("%DLQ%order_consumer_group", "*");
+```
+
+配套 Demo：[`RetryAndDlqDemo.java`](./src/main/java/com/demo/retry/RetryAndDlqDemo.java)
+
+#### 面试速记
+
+```
+消费失败 → %RETRY%<Group> → 重试 maxReconsumeTimes 次（并发默认 16）→ %DLQ%<Group>
+```
 
 ---
 
@@ -281,7 +373,7 @@ RocketMQ **至少一次（At Least Once）**语义，不保证恰好一次。幂
 4. **顺序**：同 Queue + Orderly 消费 + 相同 key 路由。
 5. **事务**：Half Message → 本地事务 → Commit/Rollback → 回查。
 6. **延迟**：18 级 Schedule Topic 中转（5.x 更灵活）。
-7. **消费**：集群分摊 Queue；失败 → 重试队列 → 死信队列。
+7. **消费**：集群分摊 Queue；失败 → `%RETRY%<Group>`（默认重试 16 次）→ `%DLQ%<Group>`；`setMaxReconsumeTimes(n)` 配置。
 8. **幂等**：业务自己做，MQ 只保证 At Least Once。
 9. **Rebalance**：扩缩容时重新分 Queue，可能重复消费。
 10. **5.x**：Proxy 网关、gRPC、Pop 消费、分层存储。
